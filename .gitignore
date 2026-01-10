@@ -31,3 +31,47 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### 🆕 Ajouts pour votre projet USSD Gateway ###
+
+# Logs
+*.log
+logs/
+
+# OS Files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Node.js / Frontend (React USSD Simulator)
+node_modules/
+frontend/node_modules/
+frontend/build/
+frontend/dist/
+frontend/.env.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Configuration locale (avec mots de passe)
+application-local.yml
+application-local.properties
+**/application-dev.yml
+**/application-prod.yml
+
+# Base de données locale
+*.db
+*.sqlite
+*.h2.db
+
+# Docker (si vous utilisez Docker plus tard)
+docker-compose.override.yml
+.env
+
+# Fichiers temporaires
+*.tmp
+*.bak
+*.swp
+.cache/
