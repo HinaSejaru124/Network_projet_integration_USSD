@@ -2,17 +2,17 @@
 const CONFIG = { 
   API_URL: 'http://localhost:8080/api/ussd', 
   TIMEOUT: 8000,
-  PHONE_NUMBER: '237690123456' // Numéro par défaut (tu peux le rendre configurable plus tard)
+  PHONE_NUMBER: '237690123456'
 };
-const ALLOWED_KEYS = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '#'];
+const ALLOWED_KEYS = ['0','1','2','3','4','5','6','7','8','9','*','#'];
 
-/** ÉTAT GLOBALE */
+/** ÉTAT GLOBAL */
 let state = { 
   currentDisplay: '', 
   sessionId: null, 
   isWaiting: false, 
   isUssdActive: false,
-  ussdCode: '' // Pour stocker le code initial
+  ussdCode: ''
 };
 
 /** ÉLÉMENTS DOM */
@@ -26,7 +26,7 @@ const elements = {
   keypad: document.getElementById('keypad')
 };
 
-// --- GESTION CLAVIER PHYSIQUE ---
+// --- CLAVIER PHYSIQUE ---
 document.addEventListener('keydown', (e) => {
   if (state.isUssdActive && document.activeElement === elements.input) {
     if (e.key === 'Enter') handleResponse();
@@ -45,18 +45,16 @@ document.addEventListener('keydown', (e) => {
 
 function simulateKeyPressHighlight(keyChar) {
   const keyEl = elements.keypad.querySelector(`[data-key="${keyChar}"]`);
-  if (keyEl) {
-    keyEl.classList.add('active-press');
-    setTimeout(() => keyEl.classList.remove('active-press'), 150);
-  }
+  if (!keyEl) return;
+  keyEl.classList.add('active-press');
+  setTimeout(() => keyEl.classList.remove('active-press'), 150);
 }
 
-// --- LOGIQUE UI COMPOSEUR ---
+// --- COMPOSEUR ---
 function press(key) {
-  if (state.currentDisplay.length < 20) {
-    state.currentDisplay += key;
-    updateDisplay();
-  }
+  if (state.currentDisplay.length >= 20) return;
+  state.currentDisplay += key;
+  updateDisplay();
 }
 
 function handleBackspace() {
@@ -68,23 +66,22 @@ function updateDisplay() {
   elements.display.innerText = state.currentDisplay;
 }
 
-// --- CŒUR USSD ---
+// --- USSD ---
 async function startUssd() {
   if (!state.currentDisplay.includes('*') || !state.currentDisplay.endsWith('#')) return;
 
-  const code = state.currentDisplay;
+  state.sessionId = 'sess_' + Date.now();
+  state.ussdCode = state.currentDisplay;
   state.currentDisplay = '';
   updateDisplay();
 
-  state.sessionId = 'sess_' + Date.now();
-  state.ussdCode = code;
   state.isUssdActive = true;
   showOverlay(true);
   await sendToBackend('', true);
 }
 
 async function handleResponse() {
-  const val = elements.input.value;
+  const val = elements.input.value.trim();
   elements.input.value = '';
   await sendToBackend(val);
 }
@@ -104,47 +101,34 @@ async function sendToBackend(userInput, isInitial = false) {
 
     const response = await fetch(CONFIG.API_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
 
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
     const data = await response.json();
-    
-    updateUssdUI({
-      message: data.message,
-      should_close: !data.continueSession
-    });
 
-  } catch (error) {
-    console.error('USSD Error:', error);
-    updateUssdUI({ 
-      message: "Erreur de connexion.\nRéessayez plus tard.", 
-      should_close: true 
-    });
+    updateUssdUI(data.message);
+
+  } catch (err) {
+    console.error(err);
+    updateUssdUI("Erreur de connexion.\nRéessayez.");
   } finally {
     toggleLoading(false);
   }
 }
 
-// --- GESTION UI USSD ---
-function updateUssdUI(data) {
-  elements.content.innerText = data.message;
+// --- UI USSD ---
+// IMPORTANT : AUCUN ÉTAT FINAL NE BLOQUE LA SAISIE
+function updateUssdUI(message) {
+  elements.content.innerText = message;
 
-  const isInteractive = !data.should_close;
-  elements.input.style.display = isInteractive ? 'block' : 'none';
-  elements.sendBtn.style.display = isInteractive ? 'block' : 'none';
+  // Toujours interactif, même après un état FINAL
+  elements.input.style.display = 'block';
+  elements.sendBtn.style.display = 'block';
 
-  if (isInteractive) {
-    setTimeout(() => elements.input.focus(), 300);
-  } else {
-    setTimeout(closeUssd, 3500);
-  }
+  setTimeout(() => elements.input.focus(), 200);
 }
 
 function showOverlay(show) {
@@ -152,30 +136,31 @@ function showOverlay(show) {
     elements.overlay.style.display = 'flex';
     elements.dialog.getBoundingClientRect();
     elements.dialog.classList.add('show');
+    elements.input.focus();
   } else {
     elements.dialog.classList.remove('show');
     setTimeout(() => {
       elements.overlay.style.display = 'none';
-      elements.content.innerText = "Chargement...";
+      elements.content.innerText = '';
       elements.input.value = '';
     }, 250);
   }
 }
 
+// Fermeture MANUELLE uniquement (jamais automatique)
 function closeUssd() {
   showOverlay(false);
-  state.sessionId = null;
-  state.isUssdActive = false;
-  state.ussdCode = '';
+  state = {
+    currentDisplay: '',
+    sessionId: null,
+    isWaiting: false,
+    isUssdActive: false,
+    ussdCode: ''
+  };
 }
 
 function toggleLoading(isLoading) {
   state.isWaiting = isLoading;
+  elements.sendBtn.disabled = isLoading;
   elements.content.style.opacity = isLoading ? '0.6' : '1';
-  if (isLoading) {
-    elements.sendBtn.disabled = true;
-  } else {
-    elements.sendBtn.disabled = false;
-    elements.content.style.opacity = '1';
-  }
 }

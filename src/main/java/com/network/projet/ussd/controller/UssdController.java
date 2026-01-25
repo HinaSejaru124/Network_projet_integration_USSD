@@ -92,7 +92,7 @@ public class UssdController {
                         .build();
                 }
                 
-                StringBuilder menu = new StringBuilder("🏠 MENU PRINCIPAL\n\n");
+                StringBuilder menu = new StringBuilder("MENU PRINCIPAL\n\n");
                 for (int i = 0; i < services.size(); i++) {
                     menu.append(String.format("%d. %s\n", i + 1, services.get(i).getName()));
                 }
