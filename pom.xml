@@ -40,10 +40,24 @@
             <scope>runtime</scope>
         </dependency>
         
+        <!-- Driver R2DBC H2 (Optionnel pour test local facile) -->
+        <dependency>
+            <groupId>io.r2dbc</groupId>
+            <artifactId>r2dbc-h2</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        
         <!-- PostgreSQL JDBC (pour Liquibase) -->
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- H2 JDBC (pour Liquibase en mode test) -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
             <scope>runtime</scope>
         </dependency>
         

@@ -1,7 +1,5 @@
 package com.network.projet.ussd.service.core;
-
 import java.util.List;
-
 import com.network.projet.ussd.domain.enums.ActionType;
 import com.network.projet.ussd.domain.enums.StateType;
 import com.network.projet.ussd.domain.model.UssdSession;
@@ -53,11 +51,14 @@ public class AutomatonEngine {
 
 		return sessionManager.getSessionData(session.getSessionId())
 				.flatMap(collectedData -> {
-					return switch (currentState.getType()) {
+					StateType type = currentState.getType() != null ? currentState.getType() : StateType.MENU;
+
+					return switch (type) {
 						case MENU -> executeMenuState(automaton, session, currentState, userInput, collectedData);
 						case INPUT -> executeInputState(automaton, session, currentState, userInput, collectedData);
 						case DISPLAY -> executeDisplayState(automaton, session, currentState, userInput, collectedData);
-						case PROCESSING -> executeProcessingState(automaton, session, currentState, userInput, collectedData);
+						case PROCESSING ->
+							executeProcessingState(automaton, session, currentState, userInput, collectedData);
 						case FINAL -> executeFinalState(automaton, session, currentState, userInput, collectedData);
 					};
 				})
@@ -347,8 +348,10 @@ public class AutomatonEngine {
 					return sessionManager.updateSession(session)
 							.then(Mono.defer(() -> {
 								// If next state is PROCESSING, execute it immediately
-								if (nextState.getType() == StateType.PROCESSING) {
-									log.debug("Next state is PROCESSING - executing immediately without waiting for input");
+								StateType nextType = nextState.getType() != null ? nextState.getType() : StateType.MENU;
+								if (nextType == StateType.PROCESSING) {
+									log.debug(
+											"Next state is PROCESSING - executing immediately without waiting for input");
 									return executeProcessingState(automaton, session, nextState, "", collectedData);
 								}
 
@@ -397,13 +400,14 @@ public class AutomatonEngine {
 				.then(sessionManager.getSessionData(session.getSessionId()))
 				.flatMap(collectedData -> {
 					// If next state is PROCESSING, execute it immediately
-					if (nextState.getType() == StateType.PROCESSING) {
+					StateType type = nextState.getType() != null ? nextState.getType() : StateType.MENU;
+					if (type == StateType.PROCESSING) {
 						log.debug("State {} is PROCESSING - executing immediately", nextStateId);
 						return executeProcessingState(automaton, session, nextState, "", collectedData);
 					}
 
 					String message = templateEngine.render(nextState.getMessage(), collectedData);
-					boolean isFinal = nextState.getType() == StateType.FINAL;
+					boolean isFinal = type == StateType.FINAL;
 
 					return Mono.just(StateResult.builder()
 							.message(message)
@@ -448,7 +452,8 @@ public class AutomatonEngine {
 
 		if (action.getOnSuccess() != null) {
 			log.debug(">>> action.getOnSuccess() = {}", action.getOnSuccess());
-			log.debug(">>> action.getOnSuccess().getResponseMapping() = {}", action.getOnSuccess().getResponseMapping());
+			log.debug(">>> action.getOnSuccess().getResponseMapping() = {}",
+					action.getOnSuccess().getResponseMapping());
 			Map<String, Object> extracted = extractResponseData(apiResponse);
 			log.debug(">>> Extracted response data: {}", extracted);
 
