@@ -36,9 +36,6 @@ public class AutomatonEngine {
 	private final ApiInvoker apiInvoker;
 	private final HandlebarsTemplateEngine templateEngine;
 
-	/**
-	 * Executes current automaton state with user input
-	 */
 	public Mono<StateResult> executeState(
 			AutomatonDefinition automaton,
 			UssdSession session,
@@ -67,61 +64,6 @@ public class AutomatonEngine {
 				.doOnError(error -> log.error("State execution failed: stateId={}", currentState.getId(), error));
 	}
 
-	/**
-	 * Finds next state based on input and validation result
-	 */
-	public Mono<State> findNextState(
-			AutomatonDefinition automaton,
-			State state,
-			String input,
-			ValidationResult validationResult) {
-
-		log.debug("Finding next state: currentState={}, input='{}', validationResult={}",
-				state.getId(), input, validationResult != null ? validationResult.getIsValid() : "N/A");
-
-		Transition directTransition = state.getTransitions().stream()
-				.filter(t -> t.getInput() != null && t.getInput().equals(input))
-				.findFirst()
-				.orElse(null);
-
-		if (directTransition != null) {
-			log.debug("Found direct transition: nextState={}", directTransition.getNextState());
-			return Mono.just(automaton.getStateById(directTransition.getNextState()));
-		}
-
-		if (validationResult != null) {
-			String condition = validationResult.getIsValid() ? "VALID" : "INVALID";
-
-			Transition conditionTransition = state.getTransitions().stream()
-					.filter(t -> condition.equals(t.getCondition()))
-					.findFirst()
-					.orElse(null);
-
-			if (conditionTransition != null) {
-				log.debug("Found condition transition: condition={}, nextState={}",
-						condition, conditionTransition.getNextState());
-				return Mono.just(automaton.getStateById(conditionTransition.getNextState()));
-			}
-		}
-
-		Transition defaultTransition = state.getTransitions().stream()
-				.filter(t -> t.getInput() == null && t.getCondition() == null)
-				.findFirst()
-				.orElse(null);
-
-		if (defaultTransition != null) {
-			log.debug("Found default transition: nextState={}", defaultTransition.getNextState());
-			return Mono.just(automaton.getStateById(defaultTransition.getNextState()));
-		}
-
-		log.warn("No next state found for state: {}", state.getId());
-		return Mono.error(new InvalidStateException(
-				"No valid transition found from state: " + state.getId()));
-	}
-
-	/**
-	 * Processes and executes an action (API call, etc.)
-	 */
 	public Mono<ActionResult> processAction(Action action, UssdSession session, AutomatonDefinition automaton) {
 		log.info("Processing action: type={}, sessionId={}", action.getType(), session.getSessionId());
 
@@ -139,15 +81,13 @@ public class AutomatonEngine {
 
 							if (action.getOnSuccess() != null && action.getOnSuccess().getNextState() != null) {
 								String nextStateId = action.getOnSuccess().getNextState();
-
-								// RÉCUPÈRE LE RESPONSE MAPPING ICI
 								Map<String, String> responseMapping = action.getOnSuccess().getResponseMapping();
 
 								return storeApiResponseData(session, action, apiResponse, collectedData)
 										.map(mergedData -> ActionResult.builder()
 												.success(true)
 												.nextState(nextStateId)
-												.responseMapping(responseMapping) // AJOUTE LE MAPPING
+												.responseMapping(responseMapping)
 												.responseData(mergedData)
 												.apiResponse(apiResponse)
 												.build());
@@ -183,7 +123,17 @@ public class AutomatonEngine {
 			String userInput,
 			Map<String, Object> collectedData) {
 
-		log.debug("Executing MENU state: {}", currentState.getId());
+		log.debug("Executing MENU state: {}, input='{}'", currentState.getId(), userInput);
+
+		// Si input est vide, afficher le menu sans erreur (première fois sur cet état)
+		if (userInput == null || userInput.trim().isEmpty()) {
+			String message = templateEngine.render(currentState.getMessage(), collectedData);
+			return Mono.just(StateResult.builder()
+					.message(message)
+					.nextStateId(currentState.getId())
+					.continueSession(true)
+					.build());
+		}
 
 		Transition matchedTransition = currentState.getTransitions().stream()
 				.filter(t -> t.getInput() != null && t.getInput().equals(userInput))
@@ -191,6 +141,7 @@ public class AutomatonEngine {
 				.orElse(null);
 
 		if (matchedTransition == null) {
+			// Option invalide - afficher le menu avec les données actuelles
 			String message = templateEngine.render(currentState.getMessage(), collectedData);
 			return Mono.just(StateResult.builder()
 					.message(message + "\n\n❌ Option invalide. Réessayez.")
@@ -207,8 +158,7 @@ public class AutomatonEngine {
 					matchedTransition.getValue());
 		}
 
-		return storeMono.then(
-				navigateToState(session, automaton, matchedTransition.getNextState()));
+		return storeMono.then(navigateToState(session, automaton, matchedTransition.getNextState()));
 	}
 
 	private Mono<StateResult> executeInputState(
@@ -261,7 +211,7 @@ public class AutomatonEngine {
 			String userInput,
 			Map<String, Object> collectedData) {
 
-		log.debug("Executing PROCESSING state: {}", currentState.getId());
+		log.debug("Executing PROCESSING state: {} - executing action immediately", currentState.getId());
 
 		Action action = currentState.getAction();
 		if (action != null) {
@@ -332,8 +282,7 @@ public class AutomatonEngine {
 			String userInput) {
 
 		return sessionManager.storeSessionData(session.getSessionId(), currentState.getStoreAs(), userInput)
-				.then(sessionManager.getSessionData(session.getSessionId()))
-				.flatMap(collectedData -> {
+				.then(Mono.defer(() -> {
 					Transition validTransition = currentState.getTransitions().stream()
 							.filter(t -> "VALID".equals(t.getCondition()))
 							.findFirst()
@@ -386,19 +335,40 @@ public class AutomatonEngine {
 				.build());
 	}
 
+	/**
+	 * CRITICAL: Navigate to state and preserve session data
+	 * 
+	 * This method MUST:
+	 * 1. Get current session data BEFORE updating session
+	 * 2. Put session data into session object
+	 * 3. Update session (which will save sessionData to DB)
+	 * 4. Use the preserved data for rendering
+	 */
 	private Mono<StateResult> navigateToState(
 			UssdSession session,
 			AutomatonDefinition automaton,
 			String nextStateId) {
 
 		State nextState = automaton.getStateById(nextStateId);
+		log.debug("Navigating to state: {} (type: {})", nextStateId, nextState.getType());
 
-		log.debug("Navigating to state: {}", nextStateId);
+		// CRITICAL: Reload session from DB to get latest sessionData
+		return sessionManager.getSession(session.getSessionId())
+				.flatMap(reloadedSession -> {
+					// Update current state ID on the RELOADED session (which has correct
+					// sessionData)
+					reloadedSession.setCurrentStateId(nextStateId);
 
-		session.setCurrentStateId(nextStateId);
-		return sessionManager.updateSession(session)
+					// Save this reloaded session
+					return sessionManager.updateSession(reloadedSession);
+				})
 				.then(sessionManager.getSessionData(session.getSessionId()))
 				.flatMap(collectedData -> {
+					// Update the in-memory session object too
+					session.setCurrentStateId(nextStateId);
+
+					log.debug(">>> collectedData keys: {}", collectedData.keySet());
+
 					// If next state is PROCESSING, execute it immediately
 					StateType type = nextState.getType() != null ? nextState.getType() : StateType.MENU;
 					if (type == StateType.PROCESSING) {
@@ -455,53 +425,40 @@ public class AutomatonEngine {
 			log.debug(">>> action.getOnSuccess().getResponseMapping() = {}",
 					action.getOnSuccess().getResponseMapping());
 			Map<String, Object> extracted = extractResponseData(apiResponse);
-			log.debug(">>> Extracted response data: {}", extracted);
 
-			// Applique le responseMapping
 			Map<String, String> responseMapping = action.getOnSuccess().getResponseMapping();
 			if (responseMapping != null && !responseMapping.isEmpty()) {
-				log.debug(">>> Applying responseMapping: {}", responseMapping);
+				// Store each mapped key individually in session
+				return reactor.core.publisher.Flux.fromIterable(responseMapping.entrySet())
+						.flatMap(entry -> {
+							String targetKey = entry.getKey();
+							String sourcePath = entry.getValue();
+							Object value = extracted.get(sourcePath);
 
-				responseMapping.forEach((targetKey, sourcePath) -> {
-					Object value = extracted.get(sourcePath);
-					if (value != null) {
-						mergedData.put(targetKey, value);
-						log.debug(">>> Mapped '{}' -> '{}' with {} items", sourcePath, targetKey,
-								value instanceof List ? ((List<?>) value).size() + " items" : "1 item");
-					} else {
-						log.warn(">>> Source path '{}' not found in extracted data", sourcePath);
-					}
-				});
+							if (value != null) {
+								mergedData.put(targetKey, value);
+								return sessionManager.storeSessionData(session.getSessionId(), targetKey, value);
+							}
+							return reactor.core.publisher.Mono.empty();
+						})
+						.then(reactor.core.publisher.Mono.just(mergedData));
 			} else {
-				// Si pas de mapping, merge tout
 				mergedData.putAll(extracted);
 			}
 		}
 
-		log.debug(">>> Final merged data keys: {}", mergedData.keySet());
-
-		return sessionManager.storeSessionData(session.getSessionId(), "_apiResponse", mergedData)
-				.thenReturn(mergedData);
+		return reactor.core.publisher.Mono.just(mergedData);
 	}
 
 	private Map<String, Object> extractResponseData(ExternalApiResponse response) {
 		Map<String, Object> extracted = new java.util.HashMap<>();
-
 		Object data = response.getData();
-
-		log.debug(">>> extractResponseData - data type: {}", data != null ? data.getClass().getName() : "null");
-		log.debug(">>> extractResponseData - data instanceof List: {}", data instanceof List);
-		log.debug(">>> extractResponseData - data instanceof Map: {}", data instanceof Map);
 
 		if (data instanceof Map) {
 			extracted.putAll((Map<String, Object>) data);
-			log.debug(">>> Extracted as Map, keys: {}", extracted.keySet());
 		} else if (data instanceof List) {
 			extracted.put("data", data);
-			log.debug(">>> Extracted as List with {} items, stored under key 'data'", ((List<?>) data).size());
 		}
-
-		log.debug(">>> Final extracted map: {}", extracted);
 
 		return extracted;
 	}
@@ -511,8 +468,6 @@ public class AutomatonEngine {
 			UssdSession session,
 			AutomatonDefinition automaton,
 			String userInput) {
-
-		// log.debug("Legacy processInput called");
 		return executeState(automaton, session, userInput);
 	}
 }
