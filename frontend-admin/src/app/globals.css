@@ -1,0 +1,111 @@
+@import "tailwindcss";
+
+@theme {
+  /* Blue Professional Theme - Basé sur les couleurs choisies par l'utilisateur */
+  --color-primary-dark: #190f56;
+  /* #190f56ff */
+  --color-primary: #1e11ad;
+  /* #1e11adff */
+  --color-primary-light: #3b2ddb;
+
+  /* Overriding teal and blue to match the user's preferred colors */
+  --color-teal-50: #f0f7ff;
+  --color-teal-100: #e0effe;
+  --color-teal-200: #bae0fd;
+  --color-teal-300: #7cc7fb;
+  --color-teal-400: #190f56;
+  --color-teal-500: #1e11ad;
+  --color-teal-600: #1a0e96;
+  --color-teal-700: #160c7d;
+  --color-teal-800: #120a64;
+  --color-teal-900: #0e074a;
+}
+
+@layer base {
+  body {
+    @apply bg-slate-50 text-slate-800 antialiased;
+    font-family: var(--font-inter), sans-serif;
+  }
+}
+
+@layer components {
+
+  /* Common Button Style */
+  .btn-primary {
+    @apply bg-primary text-white px-6 py-3 rounded-lg font-semibold transition-all hover:bg-primary-light hover:shadow-lg disabled:opacity-50 active:scale-95;
+  }
+
+  /* Card Styles - Defining them without nested apply to avoid build errors */
+  .card-shadow {
+    @apply bg-white border border-slate-200 shadow-sm rounded-xl overflow-hidden;
+  }
+
+  .card-shadow-hover {
+    @apply bg-white border border-slate-200 shadow-sm rounded-xl overflow-hidden transition-all duration-300 hover:shadow-md hover:-translate-y-1;
+  }
+
+  /* Centered Auth Card */
+  .auth-card {
+    @apply bg-white p-8 sm:p-10 rounded-3xl shadow-2xl border border-slate-100 max-w-md w-full relative z-10;
+  }
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(-20px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.4s ease-out;
+}
+
+.animate-slideIn {
+  animation: slideIn 0.3s ease-out;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e0;
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a0aec0;
+}
+
+/* Utilities for extra clarity */
+.text-contrast-high {
+  @apply text-slate-900;
+}
+
+.text-contrast-medium {
+  @apply text-slate-600;
+}
