@@ -1,4 +1,5 @@
 package com.network.projet.ussd.service.core;
+
 import java.util.List;
 import com.network.projet.ussd.domain.enums.ActionType;
 import com.network.projet.ussd.domain.enums.StateType;
@@ -215,9 +216,16 @@ public class AutomatonEngine {
 
 		Action action = currentState.getAction();
 		if (action != null) {
-			return processAction(action, session, automaton)
+			// IMPORTANT: Passer collectedData directement à processAction au lieu de le
+			// recharger
+			return processActionWithData(action, session, automaton, collectedData)
 					.flatMap(actionResult -> {
 						if (actionResult.getNextState() != null) {
+							// Si c'est une erreur avec un message, l'afficher
+							if (!actionResult.isSuccess() && actionResult.getErrorMessage() != null) {
+								return navigateToStateWithMessage(session, automaton,
+										actionResult.getNextState(), actionResult.getErrorMessage());
+							}
 							return navigateToState(session, automaton, actionResult.getNextState());
 						}
 
@@ -244,6 +252,83 @@ public class AutomatonEngine {
 				.message("Erreur: Aucune action définie")
 				.continueSession(false)
 				.build());
+	}
+
+	private Mono<StateResult> navigateToStateWithMessage(
+			UssdSession session,
+			AutomatonDefinition automaton,
+			String nextStateId,
+			String errorMessage) {
+
+		return navigateToState(session, automaton, nextStateId)
+				.map(result -> StateResult.builder()
+						.message(errorMessage + "\n\n" + result.getMessage()) // Préfixer avec le message d'erreur
+						.nextStateId(result.getNextStateId())
+						.continueSession(result.isContinueSession())
+						.build());
+	}
+
+	private Mono<ActionResult> processActionWithData(
+			Action action,
+			UssdSession session,
+			AutomatonDefinition automaton,
+			Map<String, Object> collectedData) {
+
+		log.info("Processing action with provided data: type={}, sessionId={}", action.getType(), session.getSessionId());
+		log.debug(">>> collectedData passed to API: {}", collectedData.keySet());
+
+		if (action.getType() != ActionType.API_CALL) {
+			log.warn("Unsupported action type: {}", action.getType());
+			return Mono.just(ActionResult.builder()
+					.success(false)
+					.build());
+		}
+
+		return apiInvoker.invoke(automaton.getApiConfig(), action, collectedData)
+				.flatMap(apiResponse -> {
+					log.info("API call successful for action");
+
+					if (action.getOnSuccess() != null && action.getOnSuccess().getNextState() != null) {
+						String nextStateId = action.getOnSuccess().getNextState();
+						Map<String, String> responseMapping = action.getOnSuccess().getResponseMapping();
+
+						return storeApiResponseData(session, action, apiResponse, collectedData)
+								.map(mergedData -> ActionResult.builder()
+										.success(true)
+										.nextState(nextStateId)
+										.responseMapping(responseMapping)
+										.responseData(mergedData)
+										.apiResponse(apiResponse)
+										.build());
+					}
+
+					return Mono.just(ActionResult.builder()
+							.success(true)
+							.responseData(collectedData)
+							.apiResponse(apiResponse)
+							.build());
+				})
+				.onErrorResume(error -> {
+					log.error("API call failed for action", error);
+
+					if (action.getOnError() != null) {
+						String nextStateId = action.getOnError().getNextState();
+						String errorMessage = action.getOnError().getMessage(); // ← RÉCUPÉRER LE MESSAGE
+
+						return Mono.just(ActionResult.builder()
+								.success(false)
+								.nextState(nextStateId)
+								.errorMessage(errorMessage != null ? errorMessage : error.getMessage()) // ← UTILISER LE MESSAGE
+								.exception(error)
+								.build());
+					}
+
+					return Mono.just(ActionResult.builder()
+							.success(false)
+							.errorMessage(error.getMessage())
+							.exception(error)
+							.build());
+				});
 	}
 
 	private Mono<StateResult> executeFinalState(
@@ -281,8 +366,21 @@ public class AutomatonEngine {
 			State currentState,
 			String userInput) {
 
-		return sessionManager.storeSessionData(session.getSessionId(), currentState.getStoreAs(), userInput)
+		String storeKey = currentState.getStoreAs();
+		String sessionId = session.getSessionId();
+
+		log.debug("=== HANDLE VALID INPUT START ===");
+		log.debug("SessionId: {}", sessionId);
+		log.debug("StoreKey: {}", storeKey);
+		log.debug("UserInput: {}", userInput);
+
+		// Step 1: Store the user input
+		return sessionManager.storeSessionData(sessionId, storeKey, userInput)
+				.doOnSuccess(v -> log.debug(">>> STORE COMPLETED for key: {}", storeKey))
 				.then(Mono.defer(() -> {
+					log.debug(">>> STORE THEN-DEFER executing");
+
+					// Step 2: Find the next state
 					Transition validTransition = currentState.getTransitions().stream()
 							.filter(t -> "VALID".equals(t.getCondition()))
 							.findFirst()
@@ -292,22 +390,43 @@ public class AutomatonEngine {
 					String nextStateId = validTransition.getNextState();
 					State nextState = automaton.getStateById(nextStateId);
 
-					// Navigate to next state and update session
-					session.setCurrentStateId(nextStateId);
-					return sessionManager.updateSession(session)
-							.then(Mono.defer(() -> {
-								// If next state is PROCESSING, execute it immediately
-								StateType nextType = nextState.getType() != null ? nextState.getType() : StateType.MENU;
-								if (nextType == StateType.PROCESSING) {
-									log.debug(
-											"Next state is PROCESSING - executing immediately without waiting for input");
-									return executeProcessingState(automaton, session, nextState, "", collectedData);
-								}
+					log.debug(">>> Next state: {} (type: {})", nextStateId, nextState.getType());
 
-								// Otherwise, navigate normally
-								return navigateToState(session, automaton, nextStateId);
-							}));
-				});
+					// Step 3: CRITICAL FIX - Reload session from DB to get fresh sessionData
+					return sessionManager.getSession(sessionId)
+							.flatMap(freshSession -> {
+								log.debug(">>> Reloaded session with fresh data");
+
+								// Update state on the FRESH session
+								freshSession.setCurrentStateId(nextStateId);
+
+								return sessionManager.updateSession(freshSession)
+										.doOnSuccess(v -> log.debug(">>> SESSION UPDATE COMPLETED"))
+										.then(Mono.defer(() -> {
+											log.debug(">>> UPDATE THEN-DEFER executing");
+
+											// Step 4: Execute processing state if needed
+											StateType nextType = nextState.getType() != null ? nextState.getType() : StateType.MENU;
+
+											if (nextType == StateType.PROCESSING) {
+												log.debug(">>> Next state is PROCESSING - will reload data and execute");
+
+												return sessionManager.getSessionData(sessionId)
+														.doOnNext(data -> {
+															log.debug("=== FRESH DATA LOADED ===");
+															log.debug("Data keys: {}", data.keySet());
+															log.debug("Looking for key '{}': {}", storeKey, data.get(storeKey));
+														})
+														.flatMap(
+																freshData -> executeProcessingState(automaton, freshSession, nextState, "", freshData));
+											}
+
+											// For non-processing states
+											return navigateToState(freshSession, automaton, nextStateId);
+										}));
+							});
+				}))
+				.doFinally(signal -> log.debug("=== HANDLE VALID INPUT END (signal: {}) ===", signal));
 	}
 
 	private Mono<StateResult> handleInvalidInput(
@@ -421,33 +540,37 @@ public class AutomatonEngine {
 		Map<String, Object> mergedData = new java.util.HashMap<>(collectedData);
 
 		if (action.getOnSuccess() != null) {
-			log.debug(">>> action.getOnSuccess() = {}", action.getOnSuccess());
-			log.debug(">>> action.getOnSuccess().getResponseMapping() = {}",
-					action.getOnSuccess().getResponseMapping());
 			Map<String, Object> extracted = extractResponseData(apiResponse);
+			log.debug(">>> Extracted API response data: {}", extracted.keySet());
 
 			Map<String, String> responseMapping = action.getOnSuccess().getResponseMapping();
-			if (responseMapping != null && !responseMapping.isEmpty()) {
-				// Store each mapped key individually in session
-				return reactor.core.publisher.Flux.fromIterable(responseMapping.entrySet())
-						.flatMap(entry -> {
-							String targetKey = entry.getKey();
-							String sourcePath = entry.getValue();
-							Object value = extracted.get(sourcePath);
 
-							if (value != null) {
-								mergedData.put(targetKey, value);
-								return sessionManager.storeSessionData(session.getSessionId(), targetKey, value);
-							}
-							return reactor.core.publisher.Mono.empty();
-						})
-						.then(reactor.core.publisher.Mono.just(mergedData));
+			if (responseMapping != null && !responseMapping.isEmpty()) {
+				// Préparer TOUTES les données à stocker
+				Map<String, Object> dataToStore = new java.util.HashMap<>();
+
+				responseMapping.forEach((targetKey, sourcePath) -> {
+					Object value = extractNestedValue(extracted, sourcePath);
+					log.debug(">>> Mapping: {} -> {} = {}", sourcePath, targetKey, value);
+
+					if (value != null) {
+						dataToStore.put(targetKey, value);
+						mergedData.put(targetKey, value);
+					} else {
+						log.warn(">>> No value found for path: {}", sourcePath);
+					}
+				});
+
+				// Stocker TOUT d'un coup (1 seule opération DB au lieu de 7)
+				return sessionManager.storeBatchData(session.getSessionId(), dataToStore)
+						.thenReturn(mergedData)
+						.doOnSuccess(data -> log.debug(">>> Final merged data keys: {}", data.keySet()));
 			} else {
 				mergedData.putAll(extracted);
 			}
 		}
 
-		return reactor.core.publisher.Mono.just(mergedData);
+		return Mono.just(mergedData);
 	}
 
 	private Map<String, Object> extractResponseData(ExternalApiResponse response) {
@@ -461,6 +584,44 @@ public class AutomatonEngine {
 		}
 
 		return extracted;
+	}
+
+	/**
+	 * Extrait une valeur nested depuis un path (ex: "main.temp" ou
+	 * "weather.0.description")
+	 */
+	private Object extractNestedValue(Map<String, Object> data, String path) {
+		if (path == null || path.isEmpty()) {
+			return null;
+		}
+
+		String[] parts = path.split("\\.");
+		Object current = data;
+
+		for (String part : parts) {
+			if (current instanceof Map) {
+				current = ((Map<?, ?>) current).get(part);
+				if (current == null) {
+					return null;
+				}
+			} else if (current instanceof List) {
+				try {
+					int index = Integer.parseInt(part);
+					List<?> list = (List<?>) current;
+					if (index >= 0 && index < list.size()) {
+						current = list.get(index);
+					} else {
+						return null;
+					}
+				} catch (NumberFormatException e) {
+					return null;
+				}
+			} else {
+				return null;
+			}
+		}
+
+		return current;
 	}
 
 	@Deprecated
