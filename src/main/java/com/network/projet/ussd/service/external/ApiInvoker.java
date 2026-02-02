@@ -23,6 +23,7 @@ import java.util.Map;
 import java.util.concurrent.TimeoutException;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.network.projet.ussd.exception.ApiCallException;
 
 /**
  * ApiInvoker - Service d'invocation des API externes
@@ -145,13 +146,20 @@ public class ApiInvoker {
         return requestSpec
                 .retrieve()
                 .onStatus(
-                        status -> status.is4xxClientError(),
-                        response -> {
-                            log.error("Error calling external API [{} {}]: {}",
-                                    method, url, response.statusCode());
-                            return Mono.error(new RuntimeException(
-                                    response.statusCode().value() + " from " + method + " " + url));
-                        })
+    status -> status.is4xxClientError(),
+    response -> {
+        log.error("Error calling external API [{} {}]: {}", method, url, response.statusCode());
+        return response.bodyToMono(String.class)
+            .flatMap(errorBody -> {
+                log.error("Error response body: {}", errorBody);
+                // Créer une exception personnalisée avec le body
+                return Mono.error(new ApiCallException(
+                    response.statusCode().value(),
+                    errorBody,
+                    url
+                ));
+            });
+    })
                 .onStatus(
                         status -> status.is5xxServerError(),
                         response -> {
@@ -254,15 +262,34 @@ public class ApiInvoker {
     private Object buildRequestBody(Action action, Map<String, Object> sessionData) {
         // 1. Si body explicite dans l'action
         if (action.getBody() != null) {
-            return renderBodyTemplate(action.getBody(), sessionData);
+            Object resolvedBody = renderBodyTemplate(action.getBody(), sessionData);
+
+            // ✅ AJOUTE CES LOGS ICI
+            try {
+                log.info(">>> REQUEST BODY (resolved): {}", objectMapper.writeValueAsString(resolvedBody));
+            } catch (Exception e) {
+                log.warn("Could not serialize body for logging", e);
+            }
+
+            return resolvedBody;
         }
 
         // 2. Si requestMapping défini, mapper les données
         if (action.getRequestMapping() != null && !action.getRequestMapping().isEmpty()) {
-            return buildMappedBody(action.getRequestMapping(), sessionData);
+            Map<String, Object> mappedBody = buildMappedBody(action.getRequestMapping(), sessionData);
+
+            // ✅ AJOUTE CES LOGS ICI AUSSI
+            try {
+                log.info(">>> REQUEST BODY (mapped): {}", objectMapper.writeValueAsString(mappedBody));
+            } catch (Exception e) {
+                log.warn("Could not serialize body for logging", e);
+            }
+
+            return mappedBody;
         }
 
         // 3. Par défaut, utiliser toutes les données de session
+        log.info(">>> REQUEST BODY (sessionData): {}", sessionData.keySet());
         return sessionData;
     }
 
@@ -270,6 +297,8 @@ public class ApiInvoker {
      * Rend les templates dans le body (récursif pour Map et String)
      */
     private Object renderBodyTemplate(Object body, Map<String, Object> sessionData) {
+        log.debug(">>> Rendering body template with sessionData keys: {}", sessionData.keySet());
+
         if (body instanceof String) {
             return templateEngine.render((String) body, sessionData);
         } else if (body instanceof Map) {
@@ -279,6 +308,10 @@ public class ApiInvoker {
                 Object renderedValue = value instanceof String
                         ? templateEngine.render((String) value, sessionData)
                         : value;
+
+                // ✅ LOG CHAQUE CHAMP
+                log.debug(">>> Body field: {} = {} (rendered: {})", renderedKey, value, renderedValue);
+
                 renderedMap.put(renderedKey, renderedValue);
             });
             return renderedMap;
@@ -315,11 +348,12 @@ public class ApiInvoker {
      * Gère les exceptions lors des appels API
      */
     private Mono<ExternalApiResponse> handleException(Throwable error, String url, HttpMethod method) {
-    log.error("Error calling external API [{} {}]: {}", method, url, error.getMessage());
-    
-    // Simplement propager l'erreur pour que AutomatonEngine aille dans onErrorResume()
-    return Mono.error(error);
-}
+        log.error("Error calling external API [{} {}]: {}", method, url, error.getMessage());
+
+        // Simplement propager l'erreur pour que AutomatonEngine aille dans
+        // onErrorResume()
+        return Mono.error(error);
+    }
 
     // ========== MÉTHODES UTILITAIRES ==========
 

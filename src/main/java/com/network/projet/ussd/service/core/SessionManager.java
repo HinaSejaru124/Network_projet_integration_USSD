@@ -107,49 +107,57 @@ public class SessionManager {
     }
 
     /**
- * Store multiple key-value pairs in ONE database operation (no race condition)
- */
-public Mono<Void> storeBatchData(String sessionId, Map<String, Object> dataToStore) {
-    if (dataToStore == null || dataToStore.isEmpty()) {
-        return Mono.empty();
+     * Store multiple key-value pairs in ONE database operation (no race condition)
+     */
+    public Mono<Void> storeBatchData(String sessionId, Map<String, Object> dataToStore) {
+        if (dataToStore == null || dataToStore.isEmpty()) {
+            return Mono.empty();
+        }
+
+        log.debug(">>> BATCH STORE START: sessionId={}, keys={}", sessionId, dataToStore.keySet());
+
+        return sessionRepository.findBySessionId(sessionId)
+                .switchIfEmpty(Mono.error(new RuntimeException("Session not found: " + sessionId)))
+                .flatMap(session -> {
+                    try {
+                        Map<String, Object> existingData = parseSessionData(session.getSessionData());
+
+                        log.debug(">>> BEFORE batch - existing keys: {}", existingData.keySet());
+                        existingData.putAll(dataToStore); // Ajoute TOUTES les nouvelles données d'un coup
+                        log.debug(">>> AFTER batch - new keys: {}", existingData.keySet());
+
+                        String jsonData = objectMapper.writeValueAsString(existingData);
+                        session.setSessionData(jsonData);
+                        session.preUpdate();
+
+                        return sessionRepository.save(session)
+                                .doOnSuccess(saved -> log.debug(">>> BATCH SAVED: {}", saved.getSessionData()))
+                                .then();
+
+                    } catch (Exception e) {
+                        log.error("Failed to batch store data", e);
+                        return Mono.error(new RuntimeException("Failed to batch store", e));
+                    }
+                })
+                .doOnSuccess(v -> log.debug(">>> BATCH COMPLETE: {} keys stored", dataToStore.size()));
     }
-    
-    log.debug(">>> BATCH STORE START: sessionId={}, keys={}", sessionId, dataToStore.keySet());
-    
-    return sessionRepository.findBySessionId(sessionId)
-        .switchIfEmpty(Mono.error(new RuntimeException("Session not found: " + sessionId)))
-        .flatMap(session -> {
-            try {
-                Map<String, Object> existingData = parseSessionData(session.getSessionData());
-                
-                log.debug(">>> BEFORE batch - existing keys: {}", existingData.keySet());
-                existingData.putAll(dataToStore);  // Ajoute TOUTES les nouvelles données d'un coup
-                log.debug(">>> AFTER batch - new keys: {}", existingData.keySet());
-                
-                String jsonData = objectMapper.writeValueAsString(existingData);
-                session.setSessionData(jsonData);
-                session.preUpdate();
-                
-                return sessionRepository.save(session)
-                    .doOnSuccess(saved -> log.debug(">>> BATCH SAVED: {}", saved.getSessionData()))
-                    .then();
-                    
-            } catch (Exception e) {
-                log.error("Failed to batch store data", e);
-                return Mono.error(new RuntimeException("Failed to batch store", e));
-            }
-        })
-        .doOnSuccess(v -> log.debug(">>> BATCH COMPLETE: {} keys stored", dataToStore.size()));
-}
 
     /**
      * Récupère toutes les données collectées d'une session
+     * + injecte automatiquement le phoneNumber
      */
     public Mono<Map<String, Object>> getSessionData(String sessionId) {
         log.debug("Getting session data: sessionId={}", sessionId);
 
         return sessionRepository.findBySessionId(sessionId)
-                .map(session -> parseSessionData(session.getSessionData()))
+                .map(session -> {
+                    Map<String, Object> data = parseSessionData(session.getSessionData());
+
+                    // ✅ Injection automatique du numéro de téléphone
+                    data.put("phoneNumber", session.getPhoneNumber());
+
+                    return data;
+                })
                 .defaultIfEmpty(new HashMap<>())
                 .doOnError(e -> log.error("Error retrieving session data", e));
     }

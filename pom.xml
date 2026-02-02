@@ -20,13 +20,7 @@
         <lombok.version>1.18.32</lombok.version>
     </properties>
     
-    <dependencies>
-        <!-- R2DBC PostgreSQL -->
-        <dependency>
-            <groupId>org.postgresql</groupId>
-            <artifactId>r2dbc-postgresql</artifactId>
-        </dependency>
-        
+    <dependencies>        
         <!-- Spring Boot WebFlux -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -38,12 +32,13 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-r2dbc</artifactId>
         </dependency>
-        
-        <!-- Driver R2DBC PostgreSQL -->
+
+        <!-- R2DBC PostgreSQL - VERSION EXPLICITE -->
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>r2dbc-postgresql</artifactId>
             <scope>runtime</scope>
+            <version>1.0.2.RELEASE</version>
         </dependency>
         
         <!-- Driver R2DBC H2 (Optionnel pour test local facile) -->
