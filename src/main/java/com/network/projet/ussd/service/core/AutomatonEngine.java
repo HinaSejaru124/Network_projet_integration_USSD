@@ -508,12 +508,12 @@ public class AutomatonEngine {
 					// Stocker le message d'erreur dans sessionData pour l'afficher
 					sessionData.put("apiErrorMessage", errorMessage);
 
-				// Mettre à jour l'état courant de la session si une transition est définie
-				if (nextStateId != null) {
-					session.setCurrentStateId(nextStateId);
-				}
+					// Mettre à jour l'état courant de la session si une transition est définie
+					if (nextStateId != null) {
+						session.setCurrentStateId(nextStateId);
+					}
 
-				return sessionManager.updateSession(session)
+					return sessionManager.updateSession(session)
 							.then(Mono.just(ActionResult.builder()
 									.success(false)
 									.nextState(nextStateId)
@@ -524,29 +524,29 @@ public class AutomatonEngine {
 	}
 
 	private String extractErrorMessage(Throwable error, Action action) {
-    if (error instanceof ApiCallException apiEx) {
-        try {
-            // Parser le JSON d'erreur
-            JsonNode errorJson = objectMapper.readTree(apiEx.getResponseBody());
-            
-            // Essayer plusieurs champs courants pour le message
-            if (errorJson.has("error")) {
-                return errorJson.get("error").asText();
-            } else if (errorJson.has("message")) {
-                return errorJson.get("message").asText();
-            } else if (errorJson.has("msg")) {
-                return errorJson.get("msg").asText();
-            }
-        } catch (Exception e) {
-            log.warn("Could not parse API error response", e);
-        }
-    }
-    
-    // Fallback sur le message par défaut ou le message de l'exception
-    return action.getOnError() != null && action.getOnError().getMessage() != null
-        ? action.getOnError().getMessage()
-        : error.getMessage();
-}
+		if (error instanceof ApiCallException apiEx) {
+			try {
+				// Parser le JSON d'erreur
+				JsonNode errorJson = objectMapper.readTree(apiEx.getResponseBody());
+
+				// Essayer plusieurs champs courants pour le message
+				if (errorJson.has("error")) {
+					return errorJson.get("error").asText();
+				} else if (errorJson.has("message")) {
+					return errorJson.get("message").asText();
+				} else if (errorJson.has("msg")) {
+					return errorJson.get("msg").asText();
+				}
+			} catch (Exception e) {
+				log.warn("Could not parse API error response", e);
+			}
+		}
+
+		// Fallback sur le message par défaut ou le message de l'exception
+		return action.getOnError() != null && action.getOnError().getMessage() != null
+				? action.getOnError().getMessage()
+				: error.getMessage();
+	}
 
 	private Mono<StateResult> handleActionResult(
 			AutomatonDefinition automaton,
@@ -667,7 +667,7 @@ public class AutomatonEngine {
 			Map<String, Object> collectedData) {
 
 		Map<String, Object> mergedData = new HashMap<>(collectedData);
-		Map<String, Object> extracted = extractResponseData(apiResponse);
+		Object responseData = extractResponseData(apiResponse); // ✅ Retourne Object au lieu de Map
 
 		if (action.getOnSuccess() != null) {
 			Map<String, String> responseMapping = action.getOnSuccess().getResponseMapping();
@@ -676,45 +676,69 @@ public class AutomatonEngine {
 				Map<String, Object> dataToStore = new HashMap<>();
 
 				responseMapping.forEach((targetKey, sourcePath) -> {
-					Object value = extractNestedValue(extracted, sourcePath);
+					Object value = null;
+
+					// ✅ Gérer le cas où responseData est une List
+					if (".".equals(sourcePath)) {
+						value = responseData; // Prend toute la réponse (List ou Map)
+					} else if (responseData instanceof Map) {
+						value = extractNestedValue((Map<String, Object>) responseData, sourcePath);
+					}
+
 					if (value != null) {
+						log.info("✅ Mapped '{}' <- '{}' (type: {})",
+								targetKey, sourcePath, value.getClass().getSimpleName());
 						dataToStore.put(targetKey, value);
 						mergedData.put(targetKey, value);
+					} else {
+						log.warn("⚠️ No value found for path '{}'", sourcePath);
 					}
 				});
+
+				log.debug(">>> dataToStore keys: {}", dataToStore.keySet());
+				log.debug(">>> packages value: {}", dataToStore.get("packages"));
 
 				return sessionManager.storeBatchData(session.getSessionId(), dataToStore)
 						.thenReturn(mergedData);
 			}
 
-			mergedData.putAll(extracted);
+			// Pas de responseMapping
+			if (responseData instanceof Map) {
+				mergedData.putAll((Map<String, Object>) responseData);
+			}
 		}
 
 		return Mono.just(mergedData);
 	}
 
-	private Map<String, Object> extractResponseData(ExternalApiResponse response) {
-		Map<String, Object> extracted = new HashMap<>();
+	private Object extractResponseData(ExternalApiResponse response) {
 		Object data = response.getData();
 
-		if (data instanceof Map) {
-			extracted.putAll((Map<String, Object>) data);
-		} else if (data instanceof List) {
-			extracted.put("data", data);
-		}
+		log.info("🔍 extractResponseData - data type: {}",
+				data != null ? data.getClass().getSimpleName() : "null");
 
-		return extracted;
+		// ✅ Retourne directement data (Map ou List)
+		return data;
 	}
 
-	private Object extractNestedValue(Map<String, Object> data, String path) {
+	// Même correctif
+	private Object extractNestedValue(Object data, String path) {
 		if (path == null || path.isEmpty()) {
 			return null;
+		}
+
+		// ✅ Gérer le cas spécial "."
+		if (".".equals(path)) {
+			return data;
 		}
 
 		String[] parts = path.split("\\.");
 		Object current = data;
 
 		for (String part : parts) {
+			if (part.isEmpty())
+				continue;
+
 			if (current instanceof Map) {
 				current = ((Map<?, ?>) current).get(part);
 			} else if (current instanceof List) {
@@ -729,8 +753,9 @@ public class AutomatonEngine {
 				return null;
 			}
 
-			if (current == null)
+			if (current == null) {
 				return null;
+			}
 		}
 
 		return current;
