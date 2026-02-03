@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>USSD Simulator Pro</title>
+    <!-- Google Fonts pour un look moderne -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <!-- Icones pour le téléphone -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- Coque du téléphone -->
+    <div class="phone-case">
+        <div class="notch"></div>
+        
+        <!-- Écran -->
+        <div class="phone-screen">
+            
+            <!-- Barre d'état -->
+            <div class="status-bar">
+                <span>09:41</span>
+                <span>
+                    <i class="fas fa-signal"></i>
+                    <i class="fas fa-wifi" style="margin: 0 5px;"></i>
+                    <i class="fas fa-battery-full"></i>
+                </span>
+            </div>
+
+            <!-- Affichage Principal (Dialer) -->
+            <div class="display-area">
+                <input type="text" id="phone-input" placeholder="" readonly>
+                <div class="input-label" id="add-contact">Ajouter au contact</div>
+            </div>
+
+            <!-- Clavier Numérique -->
+            <div class="keypad">
+                <button class="key-btn" onclick="typeNumber('1')">1</button>
+                <button class="key-btn" onclick="typeNumber('2')">2<div class="key-sub">ABC</div></button>
+                <button class="key-btn" onclick="typeNumber('3')">3<div class="key-sub">DEF</div></button>
+                
+                <button class="key-btn" onclick="typeNumber('4')">4<div class="key-sub">GHI</div></button>
+                <button class="key-btn" onclick="typeNumber('5')">5<div class="key-sub">JKL</div></button>
+                <button class="key-btn" onclick="typeNumber('6')">6<div class="key-sub">MNO</div></button>
+                
+                <button class="key-btn" onclick="typeNumber('7')">7<div class="key-sub">PQRS</div></button>
+                <button class="key-btn" onclick="typeNumber('8')">8<div class="key-sub">TUV</div></button>
+                <button class="key-btn" onclick="typeNumber('9')">9<div class="key-sub">WXYZ</div></button>
+                
+                <button class="key-btn special-key" onclick="typeNumber('*')">*</button>
+                <button class="key-btn" onclick="typeNumber('0')">0<div class="key-sub">+</div></button>
+                <button class="key-btn special-key" onclick="typeNumber('#')">#</button>
+                
+                <button class="key-btn" style="background: transparent; cursor: default;"></button> <!-- Spacer -->
+                <button class="key-btn call-btn" onclick="initiateUSSD()">
+                    <i class="fas fa-phone"></i>
+                </button>
+                <button class="key-btn backspace-btn" onclick="deleteChar()">
+                    <i class="fas fa-backspace"></i>
+                </button>
+            </div>
+
+            <!-- Toast Notification -->
+            <div id="toast" class="toast">Code USSD envoyé...</div>
+
+            <!-- Modale USSD (L'écran gris qui apparaît) -->
+            <div id="ussd-modal">
+                <div class="ussd-box">
+                    <div class="ussd-content">
+                        <!-- Spinner de chargement -->
+                        <div id="ussd-loading" style="display: none;">
+                            <div class="loader"></div>
+                            <p style="font-size: 14px; color: #666;">Code USSD en cours...</p>
+                        </div>
+
+                        <!-- Contenu du message -->
+                        <div id="ussd-result" style="display: none;">
+                            <p id="ussd-message"></p>
+                            <div class="ussd-input-group" id="input-container">
+                                <input type="text" id="ussd-response-input" placeholder="Répondre" autofocus>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Boutons d'action -->
+                    <div class="ussd-actions" id="ussd-buttons" style="display: none;">
+                        <button class="ussd-btn" onclick="closeUssd()">Annuler</button>
+                        <button class="ussd-btn" onclick="sendResponse()" id="send-btn">Envoyer</button>
+                    </div>
+                    <!-- Bouton OK seul (pour message final) -->
+                    <div class="ussd-actions" id="ussd-ok-btn" style="display: none;">
+                        <button class="ussd-btn" onclick="closeUssd()" style="font-weight: 600;">OK</button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- LOGIQUE JAVASCRIPT -->
+    <script src="script.js"></script>
+</body>
+</html>
